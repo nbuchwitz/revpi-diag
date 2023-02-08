@@ -1,0 +1,375 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+# vim: ts=4:sw=4:et
+
+import fcntl
+import shutil
+import struct
+
+
+class bcolors:
+    HEADER = "\033[95m"
+    OKBLUE = "\033[94m"
+    OKGREEN = "\033[92m"
+    WARNING = "\033[93m"
+    FAIL = "\033[91m"
+    ENDC = "\033[0m"
+    BOLD = "\033[1m"
+    UNDERLINE = "\033[4m"
+
+
+def device_name(type_id):
+    devices_types = {
+        # gateways
+        71: "Gateway CANopen",
+        72: "Gateway CC-Link",
+        73: "Gateway DeviceNet",
+        74: "Gateway EtherCAT",
+        75: "Gateway Ethernet/IP",
+        76: "Gateway Powerlink",
+        77: "Gateway Profibus",
+        78: "Gateway Profinet RT",
+        79: "Gateway Profinet IRT",
+        80: "Gateway CANopen Master",
+        81: "Gateway SercosIII",
+        82: "Gateway Serial",
+        85: "Gateway EtherCAT Master",
+        92: "Gateway Modbus RTU",
+        93: "Gateway Modbus TCP",
+        100: "Gateway DMX",
+        # base devices
+        95: "RevPi Core",
+        104: "RevPi Compact",
+        105: "RevPi Connect",
+        # revpi modules (pibridge)
+        96: "RevPi DIO",
+        97: "RevPi DI",
+        98: "RevPi DO",
+        103: "RevPi AIO",
+        118: "RevPi MIO",
+        # revpi modules (conbridge)
+        109: "RevPi CON CAN",
+        110: "RevPi CON M-Bus",
+        111: "RevPi CON BT",
+        # virtual devices
+        24577: "ModbusTCP Slave Adapter",
+        24578: "ModbusRTU Slave Adapter",
+        24579: "ModbusTCP Master Adapter",
+        24580: "ModbusRTU Master Adapter",
+        24581: "Profinet Controller Adapter",
+        24582: "Profinet Device Adapter",
+        24583: "RevPi7 Adapter",
+        24584: "RevPi Cloud Adapter",
+    }
+
+    name = "unknown_device"
+    if type_id in devices_types:
+        name = devices_types[type_id]
+
+    if 0x7000 <= type_id >= 0x8000:
+        name = "user defined virtual device"
+
+    return name
+
+
+class RevPiDeviceList:
+    KB_GET_DEVICE_INFO_LIST = 13
+    KB_GET_DEVICE_INFO = 14
+
+    DEVICE_SIZE = 72
+
+    def __init__(self, picontrol="/dev/piControl0"):
+        self._picontrol = picontrol
+        self._device_data = None
+        self._device_count = 0
+        self.devices = []
+
+    def load(self):
+        f = open(self._picontrol, "wb+", 0)
+        parameter = (b"K"[0] << 8) + self.KB_GET_DEVICE_INFO_LIST
+        self._device_data = bytearray(64 * 255)
+        self._device_count = fcntl.ioctl(f, parameter, self._device_data)
+        f.close()
+
+        for c in range(self._device_count):
+            offset = self.DEVICE_SIZE * c
+            end = offset + self.DEVICE_SIZE - 1
+            device = self._device_data[offset:end]
+
+            self.devices.append(RevPiDevice(device))
+
+
+class RevPiDevice:
+    MASK_NOT_CONNECTED = 0x7FFF
+
+    def __init__(self, s_device_info_str):
+        self._s_device_info_str = s_device_info_str
+
+        self.address = self._value("B", 0, 1)
+        self.serial = self._value("I", 4, 8)
+
+        self.module_type = self._value("H", 8, 10)
+        self.hardware_revision = self._value("H", 10, 12)
+        self.version_major = self._value("H", 12, 14)
+        self.version_minor = self._value("H", 14, 16)
+        self.svn_revision = self._value("I", 16, 20)
+
+        self.length_input = self._value("H", 20, 22)
+        self.length_output = self._value("H", 22, 24)
+        self.length_config = self._value("H", 24, 26)
+
+        self.offset_base = self._value("H", 26, 28)
+        self.offset_input = self._value("H", 28, 30)
+        self.offset_output = self._value("H", 30, 32)
+        self.offset_config = self._value("H", 32, 34)
+
+        self.entry_index = self._value("H", 34, 36)
+        self.entry_count = self._value("H", 36, 38)
+
+        self.fieldbus_state = self._value("B", 38, 39)
+        self.module_active = bool(self._value("B", 39, 40))
+        self.module_present = True
+        self.module_configured = True
+
+        if not self.module_active:
+            self.module_configured = bool(self.module_type & 0x8000)
+            # module must be present, if not active and also not configured
+            self.module_present = not self.module_configured
+            self.module_type &= RevPiDevice.MASK_NOT_CONNECTED
+
+    def _value(self, datatype, start, end):
+        return struct.unpack(datatype, self._s_device_info_str[start:end])[0]
+
+
+# TODO: move to tool class?
+def _value(data, datatype, start, end):
+    return struct.unpack(datatype, data[start:end])[0]
+
+
+def _file_contents(filename):
+    f = open(filename, "r")
+    content = f.readlines()
+    f.close()
+
+    return content
+
+
+def kernel_version():
+    return _file_contents("/proc/version")[0].strip()
+
+
+def debian_version():
+    return _file_contents("/etc/debian_version")[0].strip()
+
+
+def revpi_image_version():
+    return _file_contents("/etc/revpi/image-release")[0].strip()
+
+
+# TODO: Kernel version running and installed, pictory version, image version
+# raspian version: cat /etc/debian_version
+# kernel running: uname -r
+# kernel installed: dpkg -l | grep raspberrypi-kernel | awk '{print $3}'
+# pictory version: dpkg -l | grep pictory | awk '{print $3}'
+# image version: cat /etc/revpi/image-release
+# last update: ?
+# disk free: df -h /
+
+table = []
+
+table.append(["Debian version", debian_version()])
+table.append(["Kernel version", kernel_version()])
+table.append(["RevPi image", revpi_image_version()])
+
+total, used, free = shutil.disk_usage("/")
+table.append(["Disk usage", "%.2f %%" % (used * 100 / total,)])
+table.append(["Disk free", "%.2f GiB" % (free / (2**30),)])
+
+for row in table:
+    for column in row:
+        print(str(column), end="")
+    print("")
+
+# TODO: check if one base device is configured!
+
+proc_img = open("/dev/piControl0", "rb")
+data = proc_img.read()
+proc_img.close()
+
+rpi_dl = RevPiDeviceList()
+rpi_dl.load()
+devices = []
+types = []
+for d in rpi_dl.devices:
+    errors = []
+    infos = []
+    if d.module_type in (95, 104, 105):
+        # Core3, Compact or Connect
+        status = _value(data, "B", d.offset_input, d.offset_input + 1)
+        io_cycle = _value(data, "B", d.offset_input + 1, d.offset_input + 2)
+        rs485_error_cnt = _value(data, "H", d.offset_input + 2, d.offset_input + 4)
+        cpu_temperature = _value(data, "B", d.offset_input + 4, d.offset_input + 5)
+        cpu_frequency = _value(data, "B", d.offset_input + 5, d.offset_input + 6) * 10
+        rs485_threshold_reset = _value(
+            data, "H", d.offset_output + 1, d.offset_output + 3
+        )
+        rs485_threshold_stop = _value(
+            data, "H", d.offset_output + 3, d.offset_output + 5
+        )
+
+        infos.append("CPU frequency: {} MHz".format(cpu_frequency))
+        infos.append("CPU temperature: {} {}C".format(cpu_temperature, chr(176)))
+        infos.append("IO cycle: ~ {} ms".format(io_cycle))
+        infos.append(
+            "RS485 error limit 1 (reset): {} cycles".format(rs485_threshold_reset)
+        )
+        infos.append(
+            "RS485 error limit 2 (stop): {} cycles".format(rs485_threshold_stop)
+        )
+
+        if rs485_error_cnt > 0:
+            # TODO: check against thresholds (output 2/3 reset, output 4/5 stop)
+            errors.append(
+                "RS485 errors on piBridge detected ({})".format(rs485_error_cnt)
+            )
+
+        if not status & 0x01:
+            errors.append("piControl driver is not running")
+        if status & 0x02:
+            errors.append("at least one module is present, but not configured")
+        if status & 0x08:
+            errors.append(
+                "at least one module occupies more or less bytes in the process image, than configured"
+            )
+
+        if d.module_type == 105:
+            # Connect
+            pass
+
+    elif d.module_type in (77, 79):
+        # GW Profibus, GW Profinet IRT
+        # eventuell auch GW Modbus TCP (93) und Modbus TCP Master (24579)
+
+        if d.fieldbus_state == 0:
+            errors.append("fieldbus not connected to module")
+        if d.fieldbus_state == 1:
+            errors.append("fieldbus connection not established")
+        if d.fieldbus_state == 2:
+            errors.append("fieldbus connection stopped")
+
+        # TODO: information about module configuration (io count)
+
+    elif d.module_type == 24583:
+        # RevPi7
+        status = _value(data, "B", d.offset_output - 1, d.offset_output)
+
+        if status == 1:
+            errors.append("could not connect to PLC")
+
+        for task in range(32):
+            # action status
+            offset = d.offset_output - 33 + task
+            task_error = _value(data, "B", offset, offset + 1)
+
+            if task_error:
+                errors.append(
+                    "Action with id {} has been failing at least once. Reset all error flags with 'piTest -w {},1,1'".format(
+                        task + 1, d.offset_output + d.length_output - 1
+                    )
+                )
+
+        # TODO: information about configured actions
+
+    elif d.module_type in (96, 97, 98):
+        # DIO, DI or DO module
+        status_address = d.offset_input + 4
+        status = _value(data, "H", status_address, status_address + 2)
+
+        nocom_input = False
+        nocom_output = False
+
+        if d.module_type in (96, 97):
+            # DIO and DI
+            if status & 0x001:
+                errors.append(
+                    "No communication with input controller. Check power connector X2 (I)"
+                )
+                nocom_input = True
+
+            if not nocom_input:
+                if status & 0x002:
+                    errors.append("Undervoltage (<7 V) for inputs 1-8 detected")
+                if status & 0x004:
+                    errors.append("Undervoltage (<14 V) for inputs 1-8 detected")
+                if status & 0x008:
+                    errors.append("Overtemperature (>135 °C) for inputs 1-8 detected")
+                if status & 0x010:
+                    errors.append("Undervoltage (<7 V) for inputs 9-16 detected")
+                if status & 0x020:
+                    errors.append("Undervoltage (<14 V) for inputs 9-16 detected")
+                if status & 0x040:
+                    errors.append("Overtemperature (>135 °C) for input s9-16 detected")
+                if status & 0x080:
+                    errors.append("Input controller error")
+
+        if d.module_type in (96, 98):
+            # DIO and DO
+            if status & 0x100:
+                errors.append(
+                    "No communication with output controller. Check power connector X2 (O)"
+                )
+                nocom_output = True
+            if not nocom_output:
+                if status & 0x200:
+                    errors.append("CRC error output controller")
+                if status & 0x400:
+                    errors.append("Output controller error")
+
+                output_status_address = d.offset_input + 2
+                output_status = _value(
+                    data, "H", output_status_address, output_status_address + 2
+                )
+                for inp in range(16):
+                    if output_status & 1 << inp:
+                        errors.append("Channel error output {}".format(inp + 1))
+
+    if not (d.version_major == 0 or d.module_type in (95, 104, 105)):
+        infos.append(
+            "Firmware version: {}".format(d.version_major + d.version_minor / 10)
+        )
+        infos.append("SVN revision: {}".format(d.svn_revision))
+        infos.append("Serial: {}".format(d.serial))
+
+    if d.module_present and not d.module_configured:
+        errors.append("module present but not configured")
+
+    if not d.module_present and d.module_configured:
+        errors.append("module not present but configured")
+
+    # output
+    status_char = 10004
+    status_color = bcolors.OKGREEN
+
+    if not d.module_active or errors:
+        status_char = 120
+        status_color = bcolors.FAIL
+
+    print(
+        "["
+        + bcolors.BOLD
+        + status_color
+        + chr(status_char)
+        + bcolors.ENDC
+        + "] "
+        + bcolors.BOLD
+        + device_name(d.module_type)
+        + bcolors.ENDC
+        + " (address: {})".format(d.address)
+    )
+    for line in infos:
+        print("    " + line)
+
+    if errors:
+        print("    " + bcolors.FAIL + bcolors.UNDERLINE + "errors:" + bcolors.ENDC)
+        for error in errors:
+            print("    " + bcolors.FAIL + "- " + error + bcolors.ENDC)
