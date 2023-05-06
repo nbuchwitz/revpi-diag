@@ -319,7 +319,7 @@ for d in rpi_dl.devices:
                 if status & 0x020:
                     errors.append("Undervoltage (<14 V) for inputs 9-16 detected")
                 if status & 0x040:
-                    errors.append("Overtemperature (>135 °C) for input s9-16 detected")
+                    errors.append("Overtemperature (>135 °C) for input 9-16 detected")
                 if status & 0x080:
                     errors.append("Input controller error")
 
