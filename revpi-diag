@@ -75,10 +75,21 @@ def device_name(type_id):
 
 
 class RevPiDeviceList:
-    KB_GET_DEVICE_INFO_LIST = 13
-    KB_GET_DEVICE_INFO = 14
+    KB_GET_DEVICE_INFO_LIST = 0xD
+    KB_GET_DEVICE_INFO = 0xE
 
     DEVICE_SIZE = 72
+
+    MODULAR_BASE_DEVICES = (
+        95,
+        105,
+        136,
+    )
+    FIXED_BASE_DEVICES = (
+        104,
+        135,
+    )
+    BASE_DEVICES = MODULAR_BASE_DEVICES + FIXED_BASE_DEVICES
 
     def __init__(self, picontrol="/dev/piControl0"):
         self._picontrol = picontrol
@@ -205,8 +216,7 @@ types = []
 for d in rpi_dl.devices:
     errors = []
     infos = []
-    if d.module_type in (95, 104, 105):
-        # Core3, Compact or Connect
+    if d.module_type in RevPiDeviceList.MODULAR_BASE_DEVICES:
         status = _value(data, "B", d.offset_input, d.offset_input + 1)
         io_cycle = _value(data, "B", d.offset_input + 1, d.offset_input + 2)
         rs485_error_cnt = _value(data, "H", d.offset_input + 2, d.offset_input + 4)
@@ -244,9 +254,8 @@ for d in rpi_dl.devices:
                 "at least one module occupies more or less bytes in the process image, than configured"
             )
 
-        if d.module_type == 105:
-            # Connect
-            pass
+    elif d.module_type in RevPiDeviceList.FIXED_BASE_DEVICES:
+        pass
 
     elif d.module_type in (77, 79):
         # GW Profibus, GW Profinet IRT
