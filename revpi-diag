@@ -42,6 +42,7 @@ def device_name(type_id):
         104: "RevPi Compact",
         105: "RevPi Connect",
         135: "RevPi Flat",
+        136: "RevPi Connect 4",
         # revpi modules (pibridge)
         96: "RevPi DIO",
         97: "RevPi DI",
